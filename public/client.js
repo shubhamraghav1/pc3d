@@ -1,63 +1,62 @@
+// public/client.js
+
 const socket = io();
-let role = null;
 
-function selectRole(selected) {
-  role = selected;
-  document.getElementById('cameraSection').style.display = 'block';
-  document.getElementById('roleLabel').innerText = 'Role: ' + role;
+document.getElementById("leftBtn").onclick = () => initCamera("left");
+document.getElementById("rightBtn").onclick = () => initCamera("right");
+document.getElementById("hostBtn").onclick = () => initHost();
 
-  if (role === 'left') {
-    startCamera('leftVideo');
-  } else if (role === 'right') {
-    startCamera('rightVideo');
-  } else if (role === 'host') {
-    initHost();
-  }
-}
+async function initCamera(role) {
+  console.log("Starting camera for:", role);
+  const video = document.createElement("video");
+  video.autoplay = true;
+  video.playsInline = true;
+  video.muted = true;
+  document.body.innerHTML = `<h2>Role: ${role}</h2>`;
+  document.body.appendChild(video);
 
-async function startCamera(videoElementId) {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment' },
+      video: true,
       audio: false
     });
-    const videoElement = document.getElementById(videoElementId);
-    videoElement.srcObject = stream;
+    video.srcObject = stream;
 
-    // Send frames to host periodically
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+
     setInterval(() => {
-      if (videoElement.videoWidth === 0) return;
-      canvas.width = videoElement.videoWidth;
-      canvas.height = videoElement.videoHeight;
-      ctx.drawImage(videoElement, 0, 0);
-      const frame = canvas.toDataURL('image/jpeg', 0.5);
-      socket.emit('frame', { role, frame });
-    }, 300);
+      if (video.videoWidth === 0) return; // wait until video is ready
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
+      socket.emit("video-frame", {
+        role,
+        frame: canvas.toDataURL("image/jpeg", 0.5)
+      });
+    }, 200);
   } catch (err) {
-    console.error('Camera error:', err);
-    alert('Could not access camera: ' + err.message);
+    console.error("Camera error:", err);
+    alert("Could not access camera: " + err.message);
   }
 }
 
 function initHost() {
-  const leftVideo = document.getElementById('leftVideo');
-  const rightVideo = document.getElementById('rightVideo');
-  const canvas = document.getElementById('pointCloud');
-  const ctx = canvas.getContext('2d');
+  console.log("Starting host view");
+  document.body.innerHTML = `<h2>Host</h2>
+    <div style="display:flex; gap:20px;">
+      <img id="leftView" width="320"/>
+      <img id="rightView" width="320"/>
+    </div>`;
 
-  socket.on('frame', (data) => {
-    const img = new Image();
-    img.src = data.frame;
-    img.onload = () => {
-      if (data.role === 'left') {
-        leftVideo.src = img.src;
-      } else if (data.role === 'right') {
-        rightVideo.src = img.src;
-      }
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillText('Received frames from cameras. Point cloud processing goes here.', 10, 50);
-    };
+  const leftView = document.getElementById("leftView");
+  const rightView = document.getElementById("rightView");
+
+  socket.on("video-frame", (data) => {
+    if (data.role === "left") {
+      leftView.src = data.frame;
+    } else if (data.role === "right") {
+      rightView.src = data.frame;
+    }
   });
 }
