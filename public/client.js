@@ -1,62 +1,101 @@
-// public/client.js
+// client.js
 
-const socket = io();
+let localStream;
+let peerConnection;
+let socket;
 
-document.getElementById("leftBtn").onclick = () => initCamera("left");
-document.getElementById("rightBtn").onclick = () => initCamera("right");
-document.getElementById("hostBtn").onclick = () => initHost();
+const servers = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" }
+  ]
+};
 
-async function initCamera(role) {
-  console.log("Starting camera for:", role);
-  const video = document.createElement("video");
-  video.autoplay = true;
-  video.playsInline = true;
-  video.muted = true;
-  document.body.innerHTML = `<h2>Role: ${role}</h2>`;
-  document.body.appendChild(video);
+async function start() {
+  // Select video element
+  const video = document.getElementById("localVideo");
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: false
-    });
-    video.srcObject = stream;
-
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
-
-    setInterval(() => {
-      if (video.videoWidth === 0) return; // wait until video is ready
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0);
-      socket.emit("video-frame", {
-        role,
-        frame: canvas.toDataURL("image/jpeg", 0.5)
-      });
-    }, 200);
+    // Get local media stream
+    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    video.srcObject = localStream;
   } catch (err) {
-    console.error("Camera error:", err);
-    alert("Could not access camera: " + err.message);
+    console.error("Error accessing media devices.", err);
+    return;
+  }
+
+  // ✅ Fix: use secure WebSocket if site is HTTPS
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  socket = new WebSocket(`${protocol}//${window.location.host}`);
+
+  socket.onopen = () => {
+    console.log("Connected to signaling server");
+    initPeer();
+  };
+
+  socket.onmessage = async (event) => {
+    const message = JSON.parse(event.data);
+
+    if (message.offer) {
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(message.offer));
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      socket.send(JSON.stringify({ answer }));
+    } else if (message.answer) {
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(message.answer));
+    } else if (message.iceCandidate) {
+      try {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(message.iceCandidate));
+      } catch (err) {
+        console.error("Error adding received ICE candidate", err);
+      }
+    }
+  };
+
+  socket.onerror = (err) => {
+    console.error("WebSocket error:", err);
+  };
+
+  socket.onclose = () => {
+    console.log("Disconnected from signaling server");
+  };
+}
+
+function initPeer() {
+  peerConnection = new RTCPeerConnection(servers);
+
+  // Add local tracks
+  localStream.getTracks().forEach(track => {
+    peerConnection.addTrack(track, localStream);
+  });
+
+  // Handle remote stream
+  peerConnection.ontrack = (event) => {
+    const remoteVideo = document.getElementById("remoteVideo");
+    if (remoteVideo.srcObject !== event.streams[0]) {
+      remoteVideo.srcObject = event.streams[0];
+    }
+  };
+
+  // ICE candidate handling
+  peerConnection.onicecandidate = (event) => {
+    if (event.candidate) {
+      socket.send(JSON.stringify({ iceCandidate: event.candidate }));
+    }
+  };
+
+  // Create an offer
+  createOffer();
+}
+
+async function createOffer() {
+  try {
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+    socket.send(JSON.stringify({ offer }));
+  } catch (err) {
+    console.error("Error creating offer:", err);
   }
 }
 
-function initHost() {
-  console.log("Starting host view");
-  document.body.innerHTML = `<h2>Host</h2>
-    <div style="display:flex; gap:20px;">
-      <img id="leftView" width="320"/>
-      <img id="rightView" width="320"/>
-    </div>`;
-
-  const leftView = document.getElementById("leftView");
-  const rightView = document.getElementById("rightView");
-
-  socket.on("video-frame", (data) => {
-    if (data.role === "left") {
-      leftView.src = data.frame;
-    } else if (data.role === "right") {
-      rightView.src = data.frame;
-    }
-  });
-}
+// Expose start() to button
+window.start = start;
