@@ -1,31 +1,35 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Stereo 3D Point Cloud Demo</title>
+  <meta charset="utf-8" />
+  <title>WebRTC Test</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: Arial, sans-serif; text-align: center; margin: 0; padding: 20px; }
-    video { width: 45%; margin: 5px; background: #000; }
-    canvas { width: 90%; height: 500px; border: 1px solid #ccc; margin-top: 10px; }
-    button { margin: 10px; padding: 10px 20px; font-size: 16px; }
+    body { font-family: system-ui, Arial; max-width: 980px; margin: 20px auto; padding: 0 12px; }
+    button { margin: 8px 8px 12px 0; padding: 10px 14px; }
+    #videos { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+    video { width: 100%; background: #000; border-radius: 8px; }
+    #log { white-space: pre-line; background: #f6f6f8; border: 1px solid #ddd; padding: 8px; border-radius: 8px; margin-top: 12px; min-height: 40px; }
   </style>
 </head>
 <body>
-  <h2>Stereo 3D Point Cloud Demo</h2>
-  <p>Select role on this device:</p>
-  <button onclick="selectRole('left')">Left Camera</button>
-  <button onclick="selectRole('right')">Right Camera</button>
-  <button onclick="selectRole('host')">Host</button>
+  <h2>WebRTC Test</h2>
 
-  <div id="cameraSection" style="display:none;">
-    <h3 id="roleLabel"></h3>
-    <video id="leftVideo" autoplay playsinline muted></video>
-    <video id="rightVideo" autoplay playsinline muted></video>
-    <canvas id="pointCloud"></canvas>
+  <div>
+    <button id="btnHost">Join as Host (Viewer)</button>
+    <button id="btnLeft">Join as Left Camera</button>
+    <button id="btnRight">Join as Right Camera</button>
   </div>
 
-  <script src="/socket.io/socket.io.js"></script>
+  <div id="videos">
+    <!-- Host uses left/right. Camera shows only localVideo -->
+    <video id="leftVideo" autoplay playsinline></video>
+    <video id="rightVideo" autoplay playsinline></video>
+    <video id="localVideo" autoplay playsinline muted style="display:none"></video>
+  </div>
+
+  <div id="log"></div>
+
   <script src="client.js"></script>
 </body>
 </html>
