@@ -1,101 +1,117 @@
-// client.js
+(() => {
+  let role = null;
+  let ws;
 
-let localStream;
-let peerConnection;
-let socket;
+  const logEl = document.getElementById("log");
+  const leftVideo  = document.getElementById("leftVideo");
+  const rightVideo = document.getElementById("rightVideo");
+  const localVideo = document.getElementById("localVideo");
 
-const servers = {
-  iceServers: [
-    { urls: "stun:stun.l.google.com:19302" }
-  ]
-};
+  // Host keeps two peer connections; camera keeps one.
+  const peers = { left: null, right: null };
+  let camPc = null;
 
-async function start() {
-  // Select video element
-  const video = document.getElementById("localVideo");
+  const log = (m) => { console.log(m); logEl.textContent += m + "\n"; };
 
-  try {
-    // Get local media stream
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-    video.srcObject = localStream;
-  } catch (err) {
-    console.error("Error accessing media devices.", err);
-    return;
-  }
-
-  // ✅ Fix: use secure WebSocket if site is HTTPS
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  socket = new WebSocket(`${protocol}//${window.location.host}`);
-
-  socket.onopen = () => {
-    console.log("Connected to signaling server");
-    initPeer();
+  // Build WSS URL for Replit or local automatically
+  const wsUrl = () => {
+    const scheme = (location.protocol === "https:") ? "wss" : "ws";
+    return `${scheme}://${location.host}/?role=${role}`;
   };
 
-  socket.onmessage = async (event) => {
-    const message = JSON.parse(event.data);
+  function ensureWs() {
+    if (ws && ws.readyState === WebSocket.OPEN) return;
+    ws = new WebSocket(wsUrl());
+    ws.onopen    = () => log(`WS connected as ${role}`);
+    ws.onclose   = () => log("WS closed");
+    ws.onerror   = (e) => log("WS error");
+    ws.onmessage = onWsMessage;
+  }
 
-    if (message.offer) {
-      await peerConnection.setRemoteDescription(new RTCSessionDescription(message.offer));
-      const answer = await peerConnection.createAnswer();
-      await peerConnection.setLocalDescription(answer);
-      socket.send(JSON.stringify({ answer }));
-    } else if (message.answer) {
-      await peerConnection.setRemoteDescription(new RTCSessionDescription(message.answer));
-    } else if (message.iceCandidate) {
-      try {
-        await peerConnection.addIceCandidate(new RTCIceCandidate(message.iceCandidate));
-      } catch (err) {
-        console.error("Error adding received ICE candidate", err);
+  async function onWsMessage(evt) {
+    let data;
+    try { data = JSON.parse(evt.data); } catch { return; }
+
+    if (role === "host") {
+      const from = data.from; // 'left' | 'right'
+      if (!["left","right"].includes(from)) return;
+
+      if (!peers[from]) peers[from] = createHostPeer(from);
+      const pc = peers[from];
+
+      if (data.sdp) {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        if (data.sdp.type === "offer") {
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          ws.send(JSON.stringify({ to: from, sdp: pc.localDescription }));
+        }
+      } else if (data.candidate) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
+        catch (err) { log(`ICE add error (${from}): ${err}`); }
+      }
+    } else {
+      // camera receives messages from host
+      if (!camPc) return;
+      if (data.sdp) {
+        await camPc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+      } else if (data.candidate) {
+        try { await camPc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
+        catch (err) { log("ICE add error: " + err); }
       }
     }
-  };
-
-  socket.onerror = (err) => {
-    console.error("WebSocket error:", err);
-  };
-
-  socket.onclose = () => {
-    console.log("Disconnected from signaling server");
-  };
-}
-
-function initPeer() {
-  peerConnection = new RTCPeerConnection(servers);
-
-  // Add local tracks
-  localStream.getTracks().forEach(track => {
-    peerConnection.addTrack(track, localStream);
-  });
-
-  // Handle remote stream
-  peerConnection.ontrack = (event) => {
-    const remoteVideo = document.getElementById("remoteVideo");
-    if (remoteVideo.srcObject !== event.streams[0]) {
-      remoteVideo.srcObject = event.streams[0];
-    }
-  };
-
-  // ICE candidate handling
-  peerConnection.onicecandidate = (event) => {
-    if (event.candidate) {
-      socket.send(JSON.stringify({ iceCandidate: event.candidate }));
-    }
-  };
-
-  // Create an offer
-  createOffer();
-}
-
-async function createOffer() {
-  try {
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-    socket.send(JSON.stringify({ offer }));
-  } catch (err) {
-    console.error("Error creating offer:", err);
   }
-}
 
-// Expose start() to button
-window.start = start;
+  function createHostPeer(label) {
+    const pc = new RTCPeerConnection();
+    pc.onicecandidate = (e) => {
+      if (e.candidate) ws.send(JSON.stringify({ to: label, candidate: e.candidate }));
+    };
+    pc.ontrack = (e) => {
+      log(`Remote track received (${label})`);
+      const v = (label === "left") ? leftVideo : rightVideo;
+      v.srcObject = e.streams[0];
+      v.muted = true; // no audio needed; avoids autoplay issues
+    };
+    return pc;
+  }
+
+  async function startCamera(which) {
+    role = which;            // 'left' or 'right'
+    ensureWs();
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" }, audio: false
+    });
+
+    localVideo.style.display = "block";
+    leftVideo.srcObject = rightVideo.srcObject = null; // cameras show only local
+    localVideo.srcObject = stream;
+
+    camPc = new RTCPeerConnection();
+    stream.getTracks().forEach(t => camPc.addTrack(t, stream));
+
+    camPc.onicecandidate = (e) => {
+      if (e.candidate) ws.send(JSON.stringify({ candidate: e.candidate }));
+    };
+
+    const offer = await camPc.createOffer();
+    await camPc.setLocalDescription(offer);
+    ws.send(JSON.stringify({ sdp: camPc.localDescription }));
+  }
+
+  function becomeHost() {
+    role = "host";
+    ensureWs();
+    localVideo.style.display = "none";
+    localVideo.srcObject = null;
+    leftVideo.srcObject = null;
+    rightVideo.srcObject = null;
+    peers.left = peers.right = null;
+  }
+
+  // UI
+  document.getElementById("btnHost").onclick = becomeHost;
+  document.getElementById("btnLeft").onclick = () => startCamera("left");
+  document.getElementById("btnRight").onclick = () => startCamera("right");
+})();
